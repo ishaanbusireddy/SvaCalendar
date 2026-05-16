@@ -1,0 +1,367 @@
+'use client'
+
+import { useState, useRef, KeyboardEvent } from 'react'
+import { format, addMonths, subMonths, startOfMonth, endOfMonth, eachDayOfInterval, getDay, isToday, isSameMonth } from 'date-fns'
+import { Sparkles, Send, Key, ChevronLeft, ChevronRight, X, CheckCircle, AlertCircle } from 'lucide-react'
+import type { CalendarEvent, ParsedEventData, ParseStatus } from '@/lib/types'
+import { CATEGORY_COLORS, CATEGORY_LABELS } from '@/lib/utils'
+import type { EventCategory } from '@/lib/types'
+
+const QUICK_EXAMPLES = [
+  'Team sync tomorrow 10am',
+  'Lunch w/ Sarah, Friday noon',
+  'CS lecture next Mon 2pm',
+  'Gym session today 7am',
+]
+
+interface Props {
+  apiKey: string
+  onApiKeyChange: (key: string) => void
+  onEventAdded: (event: CalendarEvent) => void
+  onWeekChange: (date: Date) => void
+  currentWeek: Date
+}
+
+export default function AISidebar({ apiKey, onApiKeyChange, onEventAdded, onWeekChange, currentWeek }: Props) {
+  const [input,        setInput]        = useState('')
+  const [status,       setStatus]       = useState<ParseStatus>('idle')
+  const [errorMsg,     setErrorMsg]     = useState('')
+  const [lastParsed,   setLastParsed]   = useState<ParsedEventData | null>(null)
+  const [showKeyInput, setShowKeyInput] = useState(false)
+  const [keyDraft,     setKeyDraft]     = useState('')
+  const [miniMonth,    setMiniMonth]    = useState(new Date())
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  async function handleParse() {
+    if (!input.trim() || status === 'loading') return
+    setStatus('loading')
+    setErrorMsg('')
+    setLastParsed(null)
+
+    try {
+      const res  = await fetch('/api/parse-event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text:   input.trim(),
+          today:  new Date().toLocaleString('en-US', { timeZoneName: 'short' }),
+          apiKey: apiKey || undefined,
+        }),
+      })
+
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Parse failed')
+
+      const parsed = data as ParsedEventData
+      setLastParsed(parsed)
+      setStatus('success')
+
+      const event: CalendarEvent = {
+        id:       crypto.randomUUID(),
+        rawInput: input.trim(),
+        ...parsed,
+      }
+      onEventAdded(event)
+      setInput('')
+
+      // Auto-navigate to the event's week
+      const eventDate = new Date(parsed.date + 'T12:00:00')
+      onWeekChange(eventDate)
+
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Something went wrong')
+      setStatus('error')
+    }
+  }
+
+  function handleKey(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleParse()
+    }
+  }
+
+  function saveApiKey() {
+    onApiKeyChange(keyDraft.trim())
+    setKeyDraft('')
+    setShowKeyInput(false)
+  }
+
+  // Mini calendar helpers
+  const miniMonthDays = (() => {
+    const start = startOfMonth(miniMonth)
+    const end   = endOfMonth(miniMonth)
+    const days  = eachDayOfInterval({ start, end })
+    const prefixDays = (getDay(start) + 6) % 7 // Mon=0
+    return { days, prefixDays }
+  })()
+
+  const categories = Object.entries(CATEGORY_LABELS) as [EventCategory, string][]
+
+  return (
+    <aside className="flex flex-col h-full bg-[#08081a] border-r border-[#1e1e3a] w-[280px] flex-shrink-0">
+      {/* Logo */}
+      <div className="px-5 py-4 border-b border-[#1e1e3a]">
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <div className="w-7 h-7 rounded-lg bg-[#7c3aed] flex items-center justify-center"
+                 style={{ boxShadow: '0 0 16px rgba(124,58,237,0.6)' }}>
+              <Sparkles size={14} className="text-white" />
+            </div>
+          </div>
+          <div>
+            <h1 className="text-sm font-bold text-[#e2e2ff] tracking-tight">SvaCalendar</h1>
+            <p className="text-[9px] text-[#4040608] tracking-widest uppercase text-[#404060]">AI-Powered</p>
+          </div>
+        </div>
+      </div>
+
+      {/* AI Input */}
+      <div className="px-4 py-4 border-b border-[#1e1e3a]">
+        <p className="text-[10px] font-semibold text-[#4040608] tracking-widest uppercase text-[#404060] mb-2.5">
+          Add Event
+        </p>
+
+        <div
+          className="relative rounded-xl overflow-hidden"
+          style={{
+            background: 'rgba(255,255,255,0.03)',
+            border: status === 'loading'
+              ? '1px solid transparent'
+              : status === 'error'
+              ? '1px solid rgba(248,113,113,0.35)'
+              : '1px solid rgba(124,58,237,0.25)',
+            boxShadow: status === 'loading' ? '0 0 0 1px transparent' : undefined,
+          }}
+        >
+          {status === 'loading' && (
+            <div
+              className="absolute inset-0 rounded-xl pointer-events-none z-10"
+              style={{
+                background: 'linear-gradient(90deg, transparent 0%, rgba(124,58,237,0.4) 40%, rgba(167,139,250,0.4) 60%, transparent 100%)',
+                backgroundSize: '200% 100%',
+                animation: 'shimmer 1.8s linear infinite',
+              }}
+            />
+          )}
+
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={e => { setInput(e.target.value); setStatus('idle') }}
+            onKeyDown={handleKey}
+            disabled={status === 'loading'}
+            rows={3}
+            placeholder={"\"Meeting w/ Ling Ling nxt Wednesday 4:20\""}
+            className="w-full bg-transparent text-[#c8c8f0] text-xs leading-relaxed
+                       placeholder:text-[#2e2e4e] resize-none outline-none px-3 pt-3 pb-2
+                       disabled:opacity-50"
+          />
+
+          <div className="flex items-center justify-between px-3 pb-2.5">
+            <span className="text-[9px] text-[#2e2e4e]">⏎ to parse</span>
+            <button
+              onClick={handleParse}
+              disabled={!input.trim() || status === 'loading'}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-semibold
+                         transition-all duration-200 disabled:opacity-30"
+              style={{
+                background: 'rgba(124,58,237,0.25)',
+                color: '#a78bfa',
+                border: '1px solid rgba(124,58,237,0.3)',
+              }}
+              onMouseEnter={e => {
+                if (!e.currentTarget.disabled)
+                  e.currentTarget.style.background = 'rgba(124,58,237,0.4)'
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = 'rgba(124,58,237,0.25)'
+              }}
+            >
+              {status === 'loading' ? (
+                <>
+                  <span className="flex gap-0.5">
+                    {[0, 1, 2].map(i => (
+                      <span
+                        key={i}
+                        className="w-1 h-1 rounded-full bg-violet-400 animate-thinking"
+                        style={{ animationDelay: `${i * 0.2}s` }}
+                      />
+                    ))}
+                  </span>
+                  Parsing
+                </>
+              ) : (
+                <>
+                  <Send size={10} />
+                  Parse
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Status feedback */}
+        {status === 'success' && lastParsed && (
+          <div
+            className="mt-2.5 p-2.5 rounded-lg animate-fade-in"
+            style={{ background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.2)' }}
+          >
+            <div className="flex items-start gap-1.5">
+              <CheckCircle size={11} className="text-emerald-400 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="text-[10px] font-semibold text-emerald-400">Event added!</p>
+                <p className="text-[10px] text-[#5a9080] mt-0.5 leading-tight">
+                  {lastParsed.title} · {lastParsed.date} · {lastParsed.startTime}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {status === 'error' && (
+          <div
+            className="mt-2.5 p-2.5 rounded-lg animate-fade-in"
+            style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)' }}
+          >
+            <div className="flex items-start gap-1.5">
+              <AlertCircle size={11} className="text-red-400 mt-0.5 flex-shrink-0" />
+              <p className="text-[10px] text-red-400 leading-tight">{errorMsg}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Quick examples */}
+        <div className="mt-3">
+          <p className="text-[9px] text-[#2e2e4e] mb-1.5 tracking-wide">Quick examples</p>
+          <div className="flex flex-col gap-1">
+            {QUICK_EXAMPLES.map(ex => (
+              <button
+                key={ex}
+                onClick={() => { setInput(ex); textareaRef.current?.focus() }}
+                className="text-left text-[10px] text-[#3a3a6a] hover:text-[#7070a0]
+                           transition-colors leading-tight py-0.5 hover:pl-1 transition-all"
+              >
+                ↳ {ex}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* API Key */}
+      <div className="px-4 py-3 border-b border-[#1e1e3a]">
+        {!showKeyInput ? (
+          <button
+            onClick={() => setShowKeyInput(true)}
+            className="flex items-center gap-2 text-[10px] w-full group"
+          >
+            <Key size={10} className={apiKey ? 'text-emerald-500' : 'text-[#3a3a6a]'} />
+            <span className={apiKey ? 'text-emerald-600' : 'text-[#3a3a6a] group-hover:text-[#5050a0]'}>
+              {apiKey ? 'API key configured ✓' : 'Set Anthropic API key'}
+            </span>
+          </button>
+        ) : (
+          <div className="animate-fade-in">
+            <div className="flex gap-1.5">
+              <input
+                type="password"
+                value={keyDraft}
+                onChange={e => setKeyDraft(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && saveApiKey()}
+                placeholder="sk-ant-..."
+                autoFocus
+                className="flex-1 bg-white/5 border border-[#2e2e5e] rounded-lg px-2 py-1.5
+                           text-[10px] text-[#c0c0e0] placeholder:text-[#2e2e4e] outline-none
+                           focus:border-violet-700/50"
+              />
+              <button
+                onClick={saveApiKey}
+                className="px-2 py-1.5 rounded-lg bg-violet-900/40 text-violet-400
+                           text-[10px] hover:bg-violet-800/40 transition-colors"
+              >
+                Save
+              </button>
+              <button
+                onClick={() => setShowKeyInput(false)}
+                className="p-1.5 rounded-lg text-[#3a3a6a] hover:text-red-400 transition-colors"
+              >
+                <X size={10} />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Category legend */}
+      <div className="px-4 py-3 border-b border-[#1e1e3a]">
+        <p className="text-[9px] text-[#2e2e4e] mb-2 tracking-widest uppercase">Event Types</p>
+        <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
+          {categories.map(([cat, label]) => (
+            <div key={cat} className="flex items-center gap-1.5">
+              <div
+                className="w-2 h-2 rounded-full flex-shrink-0"
+                style={{ background: CATEGORY_COLORS[cat], boxShadow: `0 0 4px ${CATEGORY_COLORS[cat]}88` }}
+              />
+              <span className="text-[10px] text-[#3a3a5c]">{label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Mini Calendar */}
+      <div className="px-4 py-3 flex-1">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-[10px] font-semibold text-[#4040608] text-[#404060]">
+            {format(miniMonth, 'MMMM yyyy')}
+          </p>
+          <div className="flex gap-1">
+            <button
+              onClick={() => setMiniMonth(subMonths(miniMonth, 1))}
+              className="p-0.5 rounded text-[#2e2e4e] hover:text-[#6060a0] transition-colors"
+            >
+              <ChevronLeft size={12} />
+            </button>
+            <button
+              onClick={() => setMiniMonth(addMonths(miniMonth, 1))}
+              className="p-0.5 rounded text-[#2e2e4e] hover:text-[#6060a0] transition-colors"
+            >
+              <ChevronRight size={12} />
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-7 gap-0.5 mb-1">
+          {['M','T','W','T','F','S','S'].map((d, i) => (
+            <div key={i} className="text-center text-[8px] text-[#2a2a44] font-medium">{d}</div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-7 gap-0.5">
+          {Array.from({ length: miniMonthDays.prefixDays }).map((_, i) => (
+            <div key={`pre-${i}`} />
+          ))}
+          {miniMonthDays.days.map(day => {
+            const today = isToday(day)
+            const inMonth = isSameMonth(day, miniMonth)
+            return (
+              <button
+                key={day.toISOString()}
+                onClick={() => onWeekChange(day)}
+                className="aspect-square flex items-center justify-center rounded text-[9px]
+                           transition-all hover:bg-white/5"
+                style={{
+                  background: today ? '#7c3aed' : 'transparent',
+                  color:      today ? '#fff' : inMonth ? '#4a4a7a' : '#2a2a44',
+                  boxShadow:  today ? '0 0 8px rgba(124,58,237,0.5)' : 'none',
+                }}
+              >
+                {format(day, 'd')}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    </aside>
+  )
+}

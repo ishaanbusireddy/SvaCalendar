@@ -1,2 +1,4 @@
-# SvaCalendar
-AI Calendar or something of that nature.
+/** @type {import('next').NextConfig} */
+const nextConfig = {}
+
+export default nextConfig
